@@ -1,0 +1,120 @@
+/*
+ 特别要注意的是，4位数码管的管脚分布与数据手册不符，原因未知。数码管有12个管脚，从数码管
+ 正面视角，七脚边靠近自己（与手册相反），由左下角开始逆时针数管脚从1~12，管脚分别是E、D、
+ DP、C、G、Digit4、B，digit3、digit2、F、A、digit1.字母所代表的发光段与单数码管一致，
+ digit1是最左边一位，digit4在最右面。
+ MSQC6412C是共阳绿色4位数码管，硬件上位驱动阳极由UDN2981驱动（可以尝试用74HC164移位寄存器），阴极段驱动由ULN2803驱动。
+ 位驱动高电平有效，而由于ULN2803是八个独立的非门构成，因此对于控制输出而言，也是高电平有效。
+ 该高电平经过ULN2803非门反向后，成为低电平接收灌电流。
+ 段输出设定为PD0~PD7（0口~7口）、位输出设定为PB0~PB3（8口~11口）。数字输入使用PC0和PC1
+ （A0和A1），对应标示输出PC4和PC5（A4和A5）。
+ 本练习应该完成：
+ 1、常规的四位数码管点亮操作；
+ 2、用时钟中断方式点亮数码管；
+ 3、制作一个普通时钟，带闹钟的那种，用两个按键来调整时间或设置闹钟。
+ 后续：
+ 4、可将显示部分更换为OLED 屏幕或LCD屏
+ （1.3吋）；
+ 5、附加温度、湿度传感器；
+ 6、附加WiFi，实现自动对时，天气预报等
+
+ */
+ 
+ unsigned int index = 9900; //要显示的数字
+ const byte LEDs[12] =   // 发光段的数字数据，低电平有效
+ {  
+   B10000001, // 数字‘0’。从左向右，二进制第一位是DP，第二位至第八位是A~G。
+   B11001111, // 数字‘1’。
+   B10010010, // 数字‘2’。
+   B10000110,
+   B11001100,
+   B10100100,
+   B10100000,
+   B10001111,
+   B10000000,
+   B10000100, // 数字‘9’。
+   B11111111  // 不显示任何的段
+ };
+ 
+ int ledPin = 0; // 数码管的位数选择，个十百千4位，从千位开始选择1，左移一位为4是百位，以此类推。
+ volatile byte show[] = {0,0,0,0}; // 存放千百十个位所显示的数字，对应LEDs; 
+ 
+void setup() {
+  DDRD = B11111111; // DDRx:方向寄存器。x是端口号，相应位置0时为输入，置1时为输出
+  pinMode(A0,OUTPUT);  //设置数码管位选输出，这是最高位（千位）
+  pinMode(A1,OUTPUT);
+  pinMode(A2,OUTPUT);
+  pinMode(A3,OUTPUT);  //设置数码管位选输出，这是最低位
+  pinMode(A4,INPUT_PULLUP);   // 设置按钮输入1,芯片内部上拉电阻
+  pinMode(A5,INPUT_PULLUP);  // 设置按钮输入2
+
+  digitalWrite(A0, LOW);
+  digitalWrite(A1, LOW);
+  digitalWrite(A2, LOW);
+  digitalWrite(A3, LOW);
+
+  myTimer2();
+  myTimer1();
+
+}
+
+
+ISR(TIMER2_COMPA_vect)   // CTC2中断处理程序，轮巡点亮4个数码管
+{
+  digitalWrite((ledPin+13), LOW);
+  if(ledPin == 4)
+    ledPin =0;
+  digitalWrite(ledPin+14, HIGH);
+  PORTD = ~LEDs[(show[ledPin])];
+  ledPin ++; 
+  
+}
+
+ISR(TIMER1_COMPA_vect)   // CTC1中断处理程序，每秒数字加1
+{
+  if(index < 9999)
+    index ++;
+  else
+    index = 0;
+  showNo(index);
+}
+
+void showNo(int j) // 分别译码千百十个位要显示的数字
+{
+  int i;
+  for(i=3; i>=0; i--)
+  {
+    show[i] = (byte)(j % 10);
+    j /= 10;
+  }
+
+}
+
+void loop()
+{
+
+}
+
+void myTimer2() // 设置CTC2的中断
+{
+  cli(); // 全局禁止中断
+  TCCR2A = 0;
+  TCCR2B = 0;            // 定时器2的寄存器模式初始化
+  TCCR2A |= 1 << WGM21;  // 设置为CTC中断模式
+  OCR2A = 78-1;          // 设置寄存器溢出的比较条件
+  TCCR2B |= 0x07;        // 设置CTC2预分频，1024分频数，分频后每周期0.0625us X 1024 = 64us，若每5ms中断一次，则需78个脉冲。分频器设置后（哪怕不分频），计数器开始工作。
+  TIMSK2 |= 1 << OCIE2A; // 中断打开,启用比较器A。
+  sei(); // 全局允许中断
+}
+
+void myTimer1() // 设置CTC1的中断
+{
+  cli(); // 全局禁止中断
+  TCCR1A = 0;
+  TCCR1B = 0;            // 定时器1的寄存器模式初始化
+  TCCR1B |= 1 << WGM12;  // 设置为CTC中断模式，注意寄存器名称位置与CTC1不同
+  OCR1A = (15625-1)/2;       // 设置寄存器溢出的比较条件
+  TCCR1B |= 0x05;        // 设置CTC1预分频，1024分频数，分频后每周期0.0625us X 1024 = 64us，若每1sec中断一次，则需15625个脉冲。分频器设置后（哪怕不分频），计数器开始工作。
+  TIMSK1 |= 1 << OCIE1A; // 中断打开,启用比较器A。
+  sei(); // 全局允许中断
+}
